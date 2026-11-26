@@ -44,8 +44,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let state = AppState()
     private var window: NSWindow?
 
+    private var pinchMonitor: Any?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        // 트랙패드 핀치(펴기=확대, 모으기=축소)는 기기 안 페이지가 아니라 보기 배율을 바꾼다
+        pinchMonitor = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            let s = self.state
+            let next = s.scale * (1 + event.magnification)
+            s.scale = min(max(next, AppState.scaleRange.lowerBound), AppState.scaleRange.upperBound)
+            if event.phase == .ended || event.phase == .cancelled {
+                s.scale = (s.scale * 100).rounded() / 100
+            }
+            return nil
+        }
         showMainWindow()
         NSApp.activate(ignoringOtherApps: true)
     }
