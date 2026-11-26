@@ -97,13 +97,17 @@ struct ContentView: View {
             if state.enabledDevices.isEmpty {
                 ContentUnavailable()
             } else {
-                ScrollView([.vertical, .horizontal]) {
-                    FlowLayout(spacing: 28) {
-                        ForEach(state.enabledDevices) { device in
-                            DeviceCard(model: state.model(for: device), device: device)
+                GeometryReader { geo in
+                    ScrollView([.vertical, .horizontal]) {
+                        // 창 폭에 맞춰 줄바꿈. 카드 하나가 창보다 넓으면 가로 스크롤
+                        FlowLayout(spacing: 28, maxWidth: geo.size.width - 40) {
+                            ForEach(state.enabledDevices) { device in
+                                DeviceCard(model: state.model(for: device), device: device)
+                            }
                         }
+                        .padding(20)
+                        .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
                     }
-                    .padding(20)
                 }
                 .background(Color(nsColor: .underPageBackgroundColor))
             }
@@ -280,9 +284,11 @@ struct WebViewHost: NSViewRepresentable {
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 20
+    /// 줄바꿈 기준 폭. 가로 ScrollView 안에서는 제안 폭이 무한대라 직접 넘겨 받는다
+    var maxWidth: CGFloat = .infinity
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(maxWidth: proposal.width ?? .infinity, subviews: subviews)
+        let rows = arrange(maxWidth: min(proposal.width ?? .infinity, maxWidth), subviews: subviews)
         let width = rows.map { $0.width }.max() ?? 0
         let height = rows.reduce(0) { $0 + $1.height } + spacing * CGFloat(max(rows.count - 1, 0))
         return CGSize(width: width, height: height)
@@ -290,7 +296,7 @@ struct FlowLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
-        for row in arrange(maxWidth: bounds.width, subviews: subviews) {
+        for row in arrange(maxWidth: min(bounds.width, maxWidth), subviews: subviews) {
             var x = bounds.minX
             for i in row.indices {
                 let s = subviews[i].sizeThatFits(.unspecified)
