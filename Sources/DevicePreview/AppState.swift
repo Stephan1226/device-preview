@@ -32,6 +32,24 @@ final class AppState: ObservableObject {
             activeID = nil
         }
     }
+    /// 기기 안 브라우저 확대(Chrome/Safari 의 페이지 확대와 같음). 1 이면 100%.
+    /// 확대하면 같은 화면 안에서 CSS 뷰포트가 좁아진다 (예: 344px 에서 125% → 275px)
+    @Published var browserZoom: Double {
+        didSet {
+            defaults.set(browserZoom, forKey: "browserZoom")
+            models.values.forEach(applyZoom)
+        }
+    }
+    /// 기기별 브라우저 확대. 없으면 browserZoom 을 따른다
+    @Published var zoomByID: [String: Double] {
+        didSet {
+            defaults.set(zoomByID, forKey: "zoomByID")
+            models.values.forEach(applyZoom)
+        }
+    }
+    static let zoomLevels: [Double] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2]
+    static let scaleRange: ClosedRange<Double> = 0.25...1.5
+
     @Published var activeID: String?
     @Published var breakpointsText: String { didSet { defaults.set(breakpointsText, forKey: "breakpoints") } }
     /// ⌘L 로 주소창에 포커스를 주기 위한 신호
@@ -47,6 +65,9 @@ final class AppState: ObservableObject {
         rotatedIDs = Set(defaults.stringArray(forKey: "rotated") ?? [])
         let s = defaults.double(forKey: "scale")
         scale = s == 0 ? 0.6 : s
+        let z = defaults.double(forKey: "browserZoom")
+        browserZoom = z == 0 ? 1 : z
+        zoomByID = defaults.dictionary(forKey: "zoomByID") as? [String: Double] ?? [:]
         mode = Mode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .independent
         breakpointsText = defaults.string(forKey: "breakpoints") ?? ""
     }
@@ -68,14 +89,40 @@ final class AppState: ObservableObject {
             : CGSize(width: device.width, height: device.height)
     }
 
-    /// 화면에 그릴 프레임(정수 pt)과 그 프레임에서 CSS 뷰포트가 정확히 기기 폭이 되는 줌.
+    func browserZoom(of device: Device) -> Double { zoomByID[device.id] ?? browserZoom }
+
+    /// 페이지가 보게 될 CSS 뷰포트. 브라우저 확대가 100% 가 아니면 기기 크기보다 좁아진다
+    func viewport(of device: Device) -> CGSize {
+        let css = size(of: device), z = browserZoom(of: device)
+        return CGSize(width: (css.width / z).rounded(), height: (css.height / z).rounded())
+    }
+
+    /// 화면에 그릴 프레임(정수 pt)과 WKWebView 에 줄 pageZoom.
+    /// - 프레임 크기는 「보기 배율」만 따른다 (기기 크기 × scale)
+    /// - pageZoom = 보기 배율 × 브라우저 확대 → 프레임 안의 CSS 뷰포트가 viewport(of:) 가 된다
     /// WebKit 은 프레임을 정수 pt 로 다루므로 w*scale 을 그대로 쓰면 innerWidth 가 1~2px 모자란다.
     func layout(of device: Device) -> (frame: CGSize, zoom: Double) {
-        let css = size(of: device)
+        let css = size(of: device), vp = viewport(of: device)
         let fw = (css.width * scale).rounded(.up)
-        let zoom = Double(fw) / (Double(css.width) + 0.25)
-        let fh = ((css.height + 0.25) * zoom).rounded(.up)
+        let zoom = Double(fw) / (Double(vp.width) + 0.25)
+        let fh = ((vp.height + 0.25) * zoom).rounded(.up)
         return (CGSize(width: fw, height: fh), zoom)
+    }
+
+    func setBrowserZoom(_ z: Double?, for id: String) {
+        if let z, z != browserZoom { zoomByID[id] = z } else { zoomByID.removeValue(forKey: id) }
+    }
+
+    func stepBrowserZoom(_ dir: Int) {
+        let levels = Self.zoomLevels
+        if dir == 0 { browserZoom = 1; zoomByID = [:]; return }
+        let i = levels.firstIndex { $0 >= browserZoom - 0.001 } ?? levels.count - 1
+        let cur = abs(levels[i] - browserZoom) < 0.001 ? i : (dir > 0 ? i - 1 : i)
+        browserZoom = levels[min(max(cur + dir, 0), levels.count - 1)]
+    }
+
+    func stepScale(_ dir: Int) {
+        scale = min(max(((scale + 0.05 * Double(dir)) * 20).rounded() / 20, Self.scaleRange.lowerBound), Self.scaleRange.upperBound)
     }
 
     private func applyZoom(_ m: DeviceModel) {
@@ -223,7 +270,8 @@ final class DeviceModel: NSObject, ObservableObject, WKNavigationDelegate, WKScr
                 if let w, let h {
                     viewport = CGSize(width: w, height: h)
                     if ProcessInfo.processInfo.environment["DP_DEBUG"] != nil {
-                        NSLog("DP viewport %@ expected=%dx%d actual=%.0fx%.0f", device.id, device.width, device.height, w, h)
+                        let e = state?.viewport(of: device) ?? .zero
+                        NSLog("DP viewport %@ expected=%.0fx%.0f actual=%.0fx%.0f", device.id, e.width, e.height, w, h)
                     }
                 }
             case "miss":

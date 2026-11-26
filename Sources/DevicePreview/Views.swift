@@ -25,8 +25,12 @@ struct DevicePreviewApp: App {
                 }.keyboardShortcut("m", modifiers: [.command, .shift])
                 Button("전체 회전") { appDelegate.state.toggleRotateAll() }.keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
-                Button("확대") { appDelegate.state.scale = min(1, appDelegate.state.scale + 0.05) }.keyboardShortcut("=")
-                Button("축소") { appDelegate.state.scale = max(0.25, appDelegate.state.scale - 0.05) }.keyboardShortcut("-")
+                Button("보기 확대") { appDelegate.state.stepScale(1) }.keyboardShortcut("=")
+                Button("보기 축소") { appDelegate.state.stepScale(-1) }.keyboardShortcut("-")
+                Divider()
+                Button("브라우저 확대") { appDelegate.state.stepBrowserZoom(1) }.keyboardShortcut("=", modifiers: [.command, .option])
+                Button("브라우저 축소") { appDelegate.state.stepBrowserZoom(-1) }.keyboardShortcut("-", modifiers: [.command, .option])
+                Button("브라우저 실제 크기 (100%)") { appDelegate.state.stepBrowserZoom(0) }.keyboardShortcut("0", modifiers: [.command, .option])
             }
             CommandGroup(after: .windowArrangement) {
                 Button("Device Preview 창 보기") { appDelegate.showMainWindow() }.keyboardShortcut("0")
@@ -165,19 +169,35 @@ struct ContentView: View {
                 .buttonStyle(.borderless)
                 .help("전체 가로/세로 회전 (⇧⌘O)")
 
-            HStack(spacing: 4) {
-                Image(systemName: "minus.magnifyingglass").foregroundStyle(.secondary)
-                Slider(value: $state.scale, in: 0.25...1).frame(width: 110)
-                Text("\(Int((state.scale * 100).rounded()))%")
-                    .monospacedDigit().foregroundStyle(.secondary).frame(width: 38, alignment: .trailing)
+            Menu {
+                ForEach(AppState.zoomLevels, id: \.self) { z in
+                    Toggle(percent(z), isOn: Binding(get: { abs(state.browserZoom - z) < 0.001 }, set: { if $0 { state.browserZoom = z } }))
+                }
+                if !state.zoomByID.isEmpty {
+                    Divider()
+                    Button("기기별 확대 모두 해제") { state.zoomByID = [:] }
+                }
+            } label: {
+                Label("브라우저 \(percent(state.browserZoom))", systemImage: "textformat.size")
             }
-            .help("배율 (⌘- / ⌘=)")
+            .fixedSize()
+            .help("기기 안 브라우저의 페이지 확대 (⌥⌘- / ⌥⌘= / ⌥⌘0). 확대하면 같은 화면에서 CSS 폭이 좁아집니다")
+
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.dashed").foregroundStyle(.secondary)
+                Slider(value: $state.scale, in: AppState.scaleRange).frame(width: 110)
+                Text(percent(state.scale))
+                    .monospacedDigit().foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+            }
+            .help("보기 배율: 기기 화면을 크게/작게 볼 뿐 페이지 레이아웃은 그대로입니다 (⌘- / ⌘=)")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
     }
 }
+
+func percent(_ v: Double) -> String { "\(Int((v * 100).rounded()))%" }
 
 private struct ContentUnavailable: View {
     var body: some View {
@@ -202,6 +222,8 @@ struct DeviceCard: View {
 
     var body: some View {
         let size = state.size(of: device)
+        let vp = state.viewport(of: device)
+        let zoom = state.browserZoom(of: device)
         let frame = state.layout(of: device).frame
         let w = frame.width, h = frame.height
         let isActive = state.mode == .mirror && state.activeID == device.id
@@ -219,6 +241,21 @@ struct DeviceCard: View {
                     Text("⚠ 요소 못 찾음").font(.system(size: 10, weight: .semibold)).foregroundStyle(.orange)
                 }
                 Spacer(minLength: 4)
+                Menu {
+                    Toggle("전체 설정 따르기 (\(percent(state.browserZoom)))", isOn: Binding(
+                        get: { state.zoomByID[device.id] == nil }, set: { if $0 { state.setBrowserZoom(nil, for: device.id) } }))
+                    Divider()
+                    ForEach(AppState.zoomLevels, id: \.self) { z in
+                        Toggle(percent(z), isOn: Binding(
+                            get: { state.zoomByID[device.id].map { abs($0 - z) < 0.001 } ?? false },
+                            set: { if $0 { state.setBrowserZoom(z, for: device.id) } }))
+                    }
+                } label: {
+                    Image(systemName: "textformat.size")
+                }
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("이 기기만 브라우저 확대")
                 Button { state.toggleRotate(device.id) } label: { Image(systemName: "rotate.right") }
                     .help("가로/세로 회전")
                 Button { model.webView.reload() } label: { Image(systemName: "arrow.clockwise") }
@@ -228,11 +265,16 @@ struct DeviceCard: View {
 
             HStack(spacing: 6) {
                 Text("\(Int(size.width)) × \(Int(size.height))").monospacedDigit()
-                if model.viewport != .zero && Int(model.viewport.width) != Int(size.width) {
+                if abs(zoom - 1) > 0.001 {
+                    Text("\(percent(zoom)) → \(Int(vp.width))px").monospacedDigit()
+                        .foregroundStyle(state.zoomByID[device.id] != nil ? Color.purple : Color.secondary)
+                        .help("브라우저 확대 \(percent(zoom)): 페이지가 보는 CSS 폭은 \(Int(vp.width))px")
+                }
+                if model.viewport != .zero && Int(model.viewport.width) != Int(vp.width) {
                     Text("(실제 \(Int(model.viewport.width)))").foregroundStyle(.orange)
                         .help("페이지가 보고 있는 window.innerWidth")
                 }
-                if let (label, idx) = state.breakpointBadge(width: Int(size.width)) {
+                if let (label, idx) = state.breakpointBadge(width: Int(vp.width)) {
                     Text(label).font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(RoundedRectangle(cornerRadius: 4).fill(badgeColors[idx % badgeColors.count]))
