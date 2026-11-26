@@ -224,8 +224,8 @@ struct DeviceCard: View {
         let size = state.size(of: device)
         let vp = state.viewport(of: device)
         let zoom = state.browserZoom(of: device)
-        let frame = state.layout(of: device).frame
-        let w = frame.width, h = frame.height
+        let layout = state.layout(of: device)
+        let w = layout.outer.width, h = layout.outer.height
         let isActive = state.mode == .mirror && state.activeID == device.id
         let bezel: CGFloat = device.kind == .phone ? 8 : 10
 
@@ -287,7 +287,7 @@ struct DeviceCard: View {
             .foregroundStyle(.secondary)
 
             ZStack {
-                WebViewHost(webView: model.webView)
+                WebViewHost(webView: model.webView, innerSize: layout.inner)
                 if let err = model.errorText {
                     VStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle")
@@ -316,10 +316,33 @@ struct DeviceCard: View {
     }
 }
 
+/// 웹뷰를 innerSize 로 배치하고, 바깥 프레임에 맞게 bounds 를 줄여 통째로 축소해 그린다.
+/// (bounds 스케일이라 클릭 좌표도 AppKit 이 알아서 변환한다)
 struct WebViewHost: NSViewRepresentable {
     let webView: WKWebView
-    func makeNSView(context: Context) -> WKWebView { webView }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
+    let innerSize: CGSize
+
+    func makeNSView(context: Context) -> ScaledHostView {
+        let v = ScaledHostView()
+        v.addSubview(webView)
+        v.innerSize = innerSize
+        return v
+    }
+    func updateNSView(_ v: ScaledHostView, context: Context) {
+        if webView.superview !== v { v.addSubview(webView) }
+        v.innerSize = innerSize
+    }
+}
+
+final class ScaledHostView: NSView {
+    var innerSize: CGSize = .zero { didSet { if innerSize != oldValue { relayout() } } }
+    override var isFlipped: Bool { true }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); relayout() }
+    private func relayout() {
+        guard innerSize.width > 0, innerSize.height > 0 else { return }
+        setBoundsSize(innerSize)
+        subviews.first?.frame = CGRect(origin: .zero, size: innerSize)
+    }
 }
 
 // MARK: - 줄바꿈 배치

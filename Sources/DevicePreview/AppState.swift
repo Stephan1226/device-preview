@@ -97,16 +97,18 @@ final class AppState: ObservableObject {
         return CGSize(width: (css.width / z).rounded(), height: (css.height / z).rounded())
     }
 
-    /// 화면에 그릴 프레임(정수 pt)과 WKWebView 에 줄 pageZoom.
-    /// - 프레임 크기는 「보기 배율」만 따른다 (기기 크기 × scale)
-    /// - pageZoom = 보기 배율 × 브라우저 확대 → 프레임 안의 CSS 뷰포트가 viewport(of:) 가 된다
-    /// WebKit 은 프레임을 정수 pt 로 다루므로 w*scale 을 그대로 쓰면 innerWidth 가 1~2px 모자란다.
-    func layout(of device: Device) -> (frame: CGSize, zoom: Double) {
+    /// 기기 화면을 그리는 방법.
+    /// - inner: 웹뷰 자체의 프레임(정수 pt)과 pageZoom. pageZoom 은 1 이상만 쓴다.
+    ///   pageZoom 을 1 아래로 내리면 WebKit 의 최소 글자 크기 때문에 글자만 커져서 레이아웃이 깨진다.
+    /// - outer: 화면에 보이는 크기. 보기 배율이 100% 미만이면 웹뷰를 통째로(그림처럼) 줄여 그린다.
+    /// WebKit 은 프레임을 정수 pt 로 다루므로 w*s 를 그대로 쓰면 innerWidth 가 1~2px 모자란다.
+    func layout(of device: Device) -> (inner: CGSize, zoom: Double, outer: CGSize) {
         let css = size(of: device), vp = viewport(of: device)
-        let fw = (css.width * scale).rounded(.up)
+        let up = max(scale, 1), down = min(scale, 1)
+        let fw = (css.width * up).rounded(.up)
         let zoom = Double(fw) / (Double(vp.width) + 0.25)
         let fh = ((vp.height + 0.25) * zoom).rounded(.up)
-        return (CGSize(width: fw, height: fh), zoom)
+        return (CGSize(width: fw, height: fh), zoom, CGSize(width: fw * down, height: fh * down))
     }
 
     func setBrowserZoom(_ z: Double?, for id: String) {
